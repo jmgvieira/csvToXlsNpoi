@@ -1,131 +1,119 @@
 ﻿using System;
-using System.IO;
-using System.Runtime.InteropServices;
-using ClosedXML.Excel;
+using NPOI.SS.UserModel;
+using NPOI.XSSF.UserModel;
 
-namespace CsvToExcelConverter
+
+namespace MyApp
 {
-    class Program
+    internal class Program
     {
-        [DllImport("kernel32.dll", SetLastError = true)]
-        static extern bool SetConsoleOutputCP(uint wCodePageID);
         static void Main(string[] args)
         {
-
-            SetConsoleOutputCP(65001);
-            Console.OutputEncoding = System.Text.Encoding.UTF8;
-            // Verifica os parâmetros: 
-            // Uso: programa.exe <input.csv> <output.xlsx> <max_linhas> <modo(sheet/excel)>
             if (args.Length < 4)
             {
-                Console.WriteLine("Uso: programa.exe <input.csv> <output.xlsx> <max_linhas> <modo(sheet/excel)>");
+                Console.WriteLine("Uso correto: programa.exe <caminho_csv> <caminho_excel> <max_linhas> <modo>");
+                Console.WriteLine("Modo: 'sheet' para dividir em planilhas, 'file' para criar novos arquivos");
                 return;
             }
 
-            string inputCsv = args[0];
-            string outputExcel = args[1];
-            if (!int.TryParse(args[2], out int maxRows) || maxRows <= 0)
+            string csvPath = args[0];
+            string excelBasePath = args[1];
+            int maxLinhas = int.Parse(args[2]);
+            string modo = args[3].ToLower();
+
+            if (!File.Exists(csvPath))
             {
-                Console.WriteLine("O número máximo de linhas deve ser um inteiro positivo.");
+                Console.WriteLine($"Erro: O arquivo CSV '{csvPath}' não foi encontrado.");
                 return;
             }
-            string mode = args[3].ToLower();
-            if (mode != "sheet" && mode != "excel")
+
+            if (modo != "sheet" && modo != "file")
             {
-                Console.WriteLine("O modo deve ser 'sheet' ou 'excel'.");
+                Console.WriteLine("Erro: O modo deve ser 'sheet' ou 'file'.");
                 return;
             }
 
             try
             {
-                ProcessCsvToExcel(inputCsv, outputExcel, maxRows, mode);
-                Console.WriteLine("\n✅ Processamento concluído com sucesso!");
+                using var reader = new StreamReader(csvPath);
+                int arquivoIndex = 1;
+                int linhaIndex = 0;
+                int totalLinhas = CountLines(csvPath);
+                int progressoAtual = 0;
+
+                IWorkbook workbook = new XSSFWorkbook();
+                ISheet sheet = workbook.CreateSheet("Dados");
+
+                while (!reader.EndOfStream)
+                {
+                    string linha = reader.ReadLine();
+                    string[] colunas = linha.Split(';'); // Altere para ',' se necessário
+                    IRow row = sheet.CreateRow(linhaIndex);
+
+                    for (int j = 0; j < colunas.Length; j++)
+                    {
+                        row.CreateCell(j).SetCellValue(colunas[j]);
+                    }
+
+                    linhaIndex++;
+
+                    // Atualizar progresso a cada 5%
+                    int progresso = (linhaIndex * 100) / totalLinhas;
+                    if (progresso >= progressoAtual + 5)
+                    {
+                        Console.WriteLine($"Progresso: {progresso}% ({linhaIndex}/{totalLinhas} linhas processadas)");
+                        progressoAtual = progresso;
+                    }
+
+                    if (linhaIndex >= maxLinhas)
+                    {
+                        string filePath = GetNewFilePath(excelBasePath, arquivoIndex);
+                        using (var fs = new FileStream(filePath, FileMode.Create, FileAccess.Write))
+                        {
+                            workbook.Write(fs);
+                        }
+
+                        Console.WriteLine($"Arquivo Excel salvo: {filePath}");
+                        workbook = new XSSFWorkbook();
+                        sheet = workbook.CreateSheet("Dados");
+                        linhaIndex = 0;
+                        arquivoIndex++;
+                    }
+                }
+
+                // Salvar o último arquivo
+                string finalPath = GetNewFilePath(excelBasePath, arquivoIndex);
+                using (var fs = new FileStream(finalPath, FileMode.Create, FileAccess.Write))
+                {
+                    workbook.Write(fs);
+                }
+
+                Console.WriteLine($"Arquivo Excel final salvo: {finalPath}");
+                Console.WriteLine("Conversão concluída com sucesso! ✅");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"\n❌ Erro: {ex.Message}");
+                Console.WriteLine($"Erro ao converter CSV para Excel: {ex.Message}");
             }
         }
 
-        static void ProcessCsvToExcel(string inputCsv, string outputExcel, int maxRows, string mode)
+        static int CountLines(string filePath)
         {
-            // Obtém o tamanho total do ficheiro para cálculo da percentagem
-            FileInfo fileInfo = new FileInfo(inputCsv);
-            long totalSize = fileInfo.Length;
-
-            // Abre o ficheiro CSV para leitura (streaming)
-            using (StreamReader sr = new StreamReader(inputCsv))
+            int count = 0;
+            using (var reader = new StreamReader(filePath))
             {
-                if (mode == "sheet")
-                {
-                    // Modo: várias sheets num único ficheiro Excel
-                    using (var workbook = new XLWorkbook())
-                    {
-                        int sheetIndex = 1, rowIndex = 1;
-                        var worksheet = workbook.AddWorksheet("Sheet" + sheetIndex);
-                        string line;
-                        while ((line = sr.ReadLine()) != null)
-                        {
-                            // Se exceder o número máximo de linhas, cria uma nova sheet
-                            if (rowIndex > maxRows)
-                            {
-                                sheetIndex++;
-                                rowIndex = 1;
-                                worksheet = workbook.AddWorksheet("Sheet" + sheetIndex);
-                            }
-
-                            // Divide a linha com base no delimitador (alterar se necessário)
-                            string[] columns = line.Split(';');
-                            for (int col = 0; col < columns.Length; col++)
-                                worksheet.Cell(rowIndex, col + 1).Value = columns[col];
-
-                            rowIndex++;
-
-                            // Atualiza a percentagem com base na posição lida do ficheiro
-                            double progress = sr.BaseStream.Position / (double)totalSize * 100;
-                            Console.Write($"\r🔄 Processando: {progress:F2}% concluído...");
-                        }
-                        workbook.SaveAs(outputExcel);
-                    }
-                }
-                else if (mode == "excel")
-                {
-                    // Modo: vários ficheiros Excel
-                    int fileIndex = 1, rowIndex = 1;
-                    var workbook = new XLWorkbook();
-                    var worksheet = workbook.AddWorksheet("Sheet1");
-                    string line;
-                    while ((line = sr.ReadLine()) != null)
-                    {
-                        // Se exceder o número máximo de linhas, salva o ficheiro atual e inicia um novo
-                        if (rowIndex > maxRows)
-                        {
-                            string fileName = outputExcel.Replace(".xlsx", $"_{fileIndex}.xlsx");
-                            workbook.SaveAs(fileName);
-                            workbook.Dispose();
-
-                            fileIndex++;
-                            rowIndex = 1;
-                            workbook = new XLWorkbook();
-                            worksheet = workbook.AddWorksheet("Sheet1");
-                        }
-
-                        string[] columns = line.Split(';');
-                        for (int col = 0; col < columns.Length; col++)
-                            worksheet.Cell(rowIndex, col + 1).Value = columns[col];
-
-                        rowIndex++;
-
-                        double progress = sr.BaseStream.Position / (double)totalSize * 100;
-                        Console.Write($"\r🔄 Processando: {progress:F2}% concluído...");
-                    }
-
-                    // Salva o último ficheiro se houver linhas não salvas
-                    string finalFileName = outputExcel.Replace(".xlsx", $"_{fileIndex}.xlsx");
-                    workbook.SaveAs(finalFileName);
-                    workbook.Dispose();
-                }
+                while (reader.ReadLine() != null) count++;
             }
+            return count;
+        }
+
+        static string GetNewFilePath(string basePath, int index)
+        {
+            if (index == 1) return basePath;
+            string dir = Path.GetDirectoryName(basePath);
+            string nomeArquivo = Path.GetFileNameWithoutExtension(basePath);
+            string extensao = Path.GetExtension(basePath);
+            return Path.Combine(dir, $"{nomeArquivo}_{index}{extensao}");
         }
     }
 }
